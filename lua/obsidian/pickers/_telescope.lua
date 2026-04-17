@@ -283,8 +283,4 @@ TelescopePicker.pick = function(self, values, opts)
     :find()
 end
 
-TelescopePicker.new = function(client)
-  return Picker.new(TelescopePicker, client)
-end
-
 return TelescopePicker
