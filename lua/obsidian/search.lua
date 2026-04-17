@@ -10,7 +10,7 @@ local compat = require "obsidian.compat"
 
 local M = {}
 
-M._BASE_CMD = { "rg", "--no-config", "--type=md" }
+M._BASE_CMD = { "rg", "--no-config" }
 M._SEARCH_CMD = compat.flatten { M._BASE_CMD, "--json" }
 M._FIND_CMD = compat.flatten { M._BASE_CMD, "--files" }
 
@@ -314,7 +314,7 @@ SearchOpts.add_exclude = function(self, path)
 end
 
 ---@return string[]
-SearchOpts.to_ripgrep_opts = function(self)
+SearchOpts.to_ripgrep_opts = function(self, allowed_extensions)
   local opts = {}
 
   if self.sort_by ~= nil then
@@ -323,6 +323,13 @@ SearchOpts.to_ripgrep_opts = function(self)
       sort = "sort"
     end
     opts[#opts + 1] = "--" .. sort .. "=" .. self.sort_by
+  end
+
+  if allowed_extensions then
+    for _, ext in ipairs(allowed_extensions) do
+      opts[#opts + 1] = "-g"
+      opts[#opts + 1] = "*" .. ext
+    end
   end
 
   if self.fixed_strings then

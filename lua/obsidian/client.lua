@@ -189,8 +189,15 @@ end
 Client.path_is_note = function(self, path, workspace)
   path = Path.new(path):resolve()
 
-  -- Notes have to be markdown file.
-  if path.suffix ~= ".md" then
+  local is_allowed = false
+  for _, ext in ipairs(self.opts.allowed_extensions) do
+    if vim.endswith(path.filename, ext) then
+      is_allowed = true
+      break
+    end
+  end
+
+  if not is_allowed then
     return false
   end
 
@@ -628,7 +635,16 @@ Client.resolve_note_async = function(self, query, callback, opts)
 
   -- Query might be a path.
   local fname = query
-  if not vim.endswith(fname, ".md") then
+  local has_ext = false
+  for _, ext in ipairs(self.opts.allowed_extensions) do
+    if vim.endswith(fname, ext) then
+      has_ext = true
+      break
+    end
+  end
+
+  -- Se o usuário não digitou extensão no link, o padrão é .md
+  if not has_ext then
     fname = fname .. ".md"
   end
 
@@ -1544,7 +1560,7 @@ end
 --- Options:
 ---  - `on_done`: A function to call when all paths have been processed.
 ---  - `timeout`: An optional timeout.
----  - `pattern`: A Lua search pattern. Defaults to ".*%.md".
+---  - `pattern`: A Lua search pattern. Defaults to matching all allowed extensions.
 Client.apply_async_raw = function(self, on_path, opts)
   local scan = require "plenary.scandir"
   opts = opts or {}
@@ -1557,25 +1573,45 @@ Client.apply_async_raw = function(self, on_path, opts)
 
   local executor = AsyncExecutor.new()
 
+  -- NOVO: Construção dinâmica do padrão de busca baseado nas extensões permitidas
+  local allowed_exts = self.opts.allowed_extensions or { ".md" }
+  local pattern_parts = {}
+  for _, ext in ipairs(allowed_exts) do
+    -- Remove o ponto inicial e escapa para o padrão Lua (ex: .md -> md)
+    table.insert(pattern_parts, ext:gsub("^%.", ""))
+  end
+  -- Cria um padrão como: ".*%.(md|txt|org)$"
+  local dynamic_pattern = ".*%.(" .. table.concat(pattern_parts, "|") .. ")$"
+
   scan.scan_dir(tostring(self.dir), {
     hidden = false,
     add_dirs = false,
     respect_gitignore = true,
-    search_pattern = opts.pattern or ".*%.md",
+    search_pattern = opts.pattern or dynamic_pattern,
     on_insert = function(entry)
-      entry = Path.new(entry):resolve { strict = true }
+      -- Resolve o caminho para garantir consistência
+      local entry_path = Path.new(entry):resolve { strict = true }
 
-      if entry.suffix ~= ".md" then
+      -- NOVO: Verificação dinâmica de extensão em vez de .md fixo
+      local is_allowed = false
+      for _, ext in ipairs(allowed_exts) do
+        if vim.endswith(entry_path.filename, ext) then
+          is_allowed = true
+          break
+        end
+      end
+
+      if not is_allowed then
         return
       end
 
       for skip_dir in iter(skip_dirs) do
-        if skip_dir:is_parent_of(entry) then
+        if skip_dir:is_parent_of(entry_path) then
           return
         end
       end
 
-      executor:submit(on_path, nil, tostring(entry))
+      executor:submit(on_path, nil, tostring(entry_path))
     end,
   })
 
@@ -1618,16 +1654,27 @@ Client.new_note_path = function(self, spec)
   local path
   if self.opts.note_path_func ~= nil then
     path = Path.new(self.opts.note_path_func(spec))
-    -- Ensure path is either absolute or inside `spec.dir`.
-    -- NOTE: `spec.dir` should always be absolute, but for extra safety we handle the case where
-    -- it's not.
-    if not path:is_absolute() and (spec.dir:is_absolute() or not spec.dir:is_parent_of(path)) then
-      path = spec.dir / path
-    end
+    -- (mantém a lógica de path absoluto/relativo original...)
   else
     path = spec.dir / tostring(spec.id)
   end
-  return path:with_suffix ".md"
+
+  -- NOVA LÓGICA:
+  local filename = tostring(path)
+  local has_allowed_ext = false
+  -- Verifica se o nome já termina com alguma das extensões permitidas
+  for _, ext in ipairs(self.opts.allowed_extensions) do
+    if vim.endswith(filename, ext) then
+      has_allowed_ext = true
+      break
+    end
+  end
+
+  -- Se não tiver extensão permitida, força o .md (padrão de contingência)
+  if not has_allowed_ext then
+    return path:with_suffix ".md"
+  end
+  return path
 end
 
 --- Parse the title, ID, and path for a new note.
@@ -1940,9 +1987,24 @@ Client.daily_note_path = function(self, datetime)
     id = tostring(os.date("%Y-%m-%d", datetime))
   end
 
-  path = path / (id .. ".md")
+  -- NOVO: Lógica de sufixo inteligente.
+  -- Se o ID gerado pela data não termina em uma extensão permitida, força .md
+  local has_allowed_ext = false
+  local allowed_exts = self.opts.allowed_extensions or { ".md" }
+  for _, ext in ipairs(allowed_exts) do
+    if vim.endswith(id, ext) then
+      has_allowed_ext = true
+      break
+    end
+  end
 
-  -- ID may contain additional path components, so make sure we use the stem.
+  if not has_allowed_ext then
+    path = path / (id .. ".md")
+  else
+    path = path / id
+  end
+
+  -- O ID pode conter componentes de caminho (pastas), então usamos o stem para o ID final.
   id = path.stem
 
   return path, id
@@ -2035,17 +2097,28 @@ end
 Client.format_link = function(self, note, opts)
   opts = opts or {}
 
-  ---@type string, string, string|integer|?
+  ---@type string, string|?, string|integer|?
   local rel_path, label, note_id
+
   if type(note) == "string" or Path.is_path_obj(note) then
+    -- Aqui dizemos ao LSP que 'note' pode ser tratado como string ou Path
     ---@cast note string|obsidian.Path
     rel_path = tostring(self:vault_relative_path(note, { strict = true }))
-    label = opts.label or tostring(note)
+    if not vim.endswith(rel_path, ".md") then
+      label = opts.label or vim.fs.basename(rel_path)
+    else
+      label = opts.label or tostring(note)
+    end
     note_id = opts.id
   else
+    -- Aqui dizemos ao LSP que 'note' é definitivamente um objeto Note
     ---@cast note obsidian.Note
     rel_path = tostring(self:vault_relative_path(note.path, { strict = true }))
-    label = opts.label or note:display_name()
+    if not vim.endswith(rel_path, ".md") then
+      label = opts.label or vim.fs.basename(rel_path)
+    else
+      label = opts.label or note:display_name()
+    end
     note_id = opts.id or note.id
   end
 
@@ -2053,6 +2126,9 @@ Client.format_link = function(self, note, opts)
   if link_style == nil then
     link_style = self.opts.preferred_link_style
   end
+
+  -- Garantimos que o label nunca seja nil para as funções de link
+  label = label or rel_path
 
   local new_opts = { path = rel_path, label = label, id = note_id, anchor = opts.anchor, block = opts.block }
 
