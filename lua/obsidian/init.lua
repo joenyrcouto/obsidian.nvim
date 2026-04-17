@@ -12,6 +12,7 @@ local module_lookups = {
   log = "obsidian.log",
   img_paste = "obsidian.img_paste",
   itertools = "obsidian.itertools",
+  keymap = "keymap",
   mappings = "obsidian.mappings",
   Note = "obsidian.note",
   Path = "obsidian.path",
