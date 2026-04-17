@@ -39,7 +39,35 @@ local resolve_template = function(template_name, client)
   return template_path
 end
 
---- Substitute variables inside the given text.
+--- NOVO: Resolve qual template usar baseado na pasta de destino (Mapeamento por Diretório)
+---@param client obsidian.Client
+---@param path obsidian.Path
+---@return string|?
+M.get_template_for_path = function(client, path)
+  local rel_path = client:vault_relative_path(path)
+  if not rel_path then
+    return nil
+  end
+
+  local mappings = client.opts.templates.template_mappings or {}
+  local rel_path_str = tostring(rel_path)
+
+  -- Ordena as chaves por comprimento (maior primeiro) para garantir que pastas
+  -- mais profundas tenham prioridade sobre pastas raiz.
+  local keys = vim.tbl_keys(mappings)
+  table.sort(keys, function(a, b)
+    return #a > #b
+  end)
+
+  for _, dir in ipairs(keys) do
+    if vim.startswith(rel_path_str, dir) then
+      return mappings[dir]
+    end
+  end
+  return nil
+end
+
+--- Substitute variables inside the given text (Enhanced with Templater support).
 ---
 ---@param text string
 ---@param client obsidian.Client
@@ -49,6 +77,7 @@ end
 M.substitute_template_variables = function(text, client, note)
   local methods = vim.deepcopy(client.opts.templates.substitutions or {})
 
+  -- 1. Definições de Variáveis Padrão
   if not methods["date"] then
     methods["date"] = function()
       local date_format = client.opts.templates.date_format or "%Y-%m-%d"
@@ -75,23 +104,38 @@ M.substitute_template_variables = function(text, client, note)
     methods["path"] = tostring(note.path)
   end
 
-  -- Replace known variables.
+  -- 2. Processamento de Variáveis Estilo Obsidian {{variable}}
   for key, subst in pairs(methods) do
     for m_start, m_end in util.gfind(text, "{{" .. key .. "}}", nil, true) do
-      ---@type string
-      local value
-      if type(subst) == "string" then
-        value = subst
-      else
-        value = subst()
-        -- cache the result
-        methods[key] = value
-      end
+      local value = type(subst) == "string" and subst or subst()
+      methods[key] = value -- cache
       text = string.sub(text, 1, m_start - 1) .. value .. string.sub(text, m_end + 1)
     end
   end
 
-  -- Find unknown variables and prompt for them.
+  -- 3. COMPATIBILIDADE TEMPLATER: <% tp... %>
+  if client.opts.templates.templater_compat then
+    -- Tradução de Título: <% tp.file.title %>
+    text = text:gsub("<%% tp%.file%.title %%>", methods["title"])
+
+    -- Tradução de Datas: <% tp.date.now("format") %>
+    text = text:gsub('<%% tp%.date%.now%("(.-)"%) %%>', function(fmt)
+      -- Converte formatos Moment.js comuns para Lua
+      local lua_fmt = fmt
+        :gsub("YYYY", "%%Y")
+        :gsub("MM", "%%m")
+        :gsub("DD", "%%d")
+        :gsub("HH", "%%H")
+        :gsub("mm", "%%M")
+        :gsub("ss", "%%S")
+      return os.date(lua_fmt)
+    end)
+
+    -- Tradução de Data Simples: <% tp.date.now() %>
+    text = text:gsub("<%% tp%.date%.now%(%) %%>", os.date "%Y-%m-%d")
+  end
+
+  -- 4. Prompt para variáveis desconhecidas {{prompt}}
   for m_start, m_end in util.gfind(text, "{{[^}]+}}") do
     local key = util.strip_whitespace(string.sub(text, m_start + 2, m_end - 2))
     local value = util.input(string.format("Enter value for '%s' (<cr> to skip): ", key))
@@ -105,14 +149,33 @@ end
 
 --- Clone template to a new note.
 ---
----@param opts { template_name: string|obsidian.Path, path: obsidian.Path|string, client: obsidian.Client, note: obsidian.Note } Options.
+---@param opts { template_name: string|obsidian.Path|?, path: obsidian.Path|string, client: obsidian.Client, note: obsidian.Note } Options.
 ---
 ---@return obsidian.Note
 M.clone_template = function(opts)
   local note_path = Path.new(opts.path)
   assert(note_path:parent()):mkdir { parents = true, exist_ok = true }
 
-  local template_path = resolve_template(opts.template_name, opts.client)
+  -- INVERSÃO DE CONTROLE: Se não houver template definido, tenta o mapeamento por pasta
+  local template_name = opts.template_name
+  if template_name == nil or template_name == "" then
+    template_name = M.get_template_for_path(opts.client, note_path)
+  end
+
+  -- Se ainda assim não houver template, cria um arquivo com frontmatter básico (Fallback)
+  if template_name == nil or template_name == "" then
+    local note_file = io.open(tostring(note_path), "w")
+    if note_file then
+      local title = opts.note.title or note_path.stem
+      local header = string.format("---\ntitle: %s\ndate: %s\n---\n\n# %s\n", title, os.date "%Y-%m-%d %H:%M", title)
+      note_file:write(header)
+      note_file:close()
+    end
+    return Note.from_file(note_path)
+  end
+
+  -- Fluxo normal de template
+  local template_path = resolve_template(template_name, opts.client)
 
   local template_file, read_err = io.open(tostring(template_path), "r")
   if not template_file then

@@ -246,6 +246,8 @@ Picker.pick_note = function(self, notes, opts)
     entries[#entries + 1] = {
       value = note,
       display = display_name,
+      -- AJUSTE: Incluímos o rel_path completo no ordinal para que você possa
+      -- filtrar por extensão digitando ".base" ou ".qmd" no picker.
       ordinal = rel_path .. " " .. display_name,
       filename = tostring(note.path),
     }
@@ -306,19 +308,22 @@ end
 
 --- Get query mappings to use for `find_notes()` or `grep_notes()`.
 ---@return obsidian.PickerMappingTable
-Picker._note_query_mappings = function(self)
-  ---@type obsidian.PickerMappingTable
+Picker._note_selection_mappings = function(self)
   local mappings = {}
-
-  if self.client.opts.picker.note_mappings and key_is_set(self.client.opts.picker.note_mappings.new) then
-    mappings[self.client.opts.picker.note_mappings.new] = {
-      desc = "new",
-      callback = function(query)
-        self.client:command("ObsidianNew", { args = query })
+  if self.client.opts.picker.note_mappings and key_is_set(self.client.opts.picker.note_mappings.insert_link) then
+    mappings[self.client.opts.picker.note_mappings.insert_link] = {
+      desc = "insert link",
+      callback = function(note_or_path)
+        local note = Note.is_note_obj(note_or_path) and note_or_path or Note.from_file(note_or_path)
+        -- AJUSTE: Aqui ele chama o client:format_link que refatoramos.
+        -- Isso garante que se for .base, ele insira [[books.base]]
+        local link = self.client:format_link(note, {})
+        -- Insere no buffer e atualiza a UI
+        vim.api.nvim_put({ link }, "c", true, true)
+        self.client:update_ui()
       end,
     }
   end
-
   return mappings
 end
 
@@ -503,8 +508,12 @@ end
 ---@return string[]
 Picker._build_find_cmd = function(self)
   local search = require "obsidian.search"
-  local search_opts =
-    search.SearchOpts.from_tbl { sort_by = self.client.opts.sort_by, sort_reversed = self.client.opts.sort_reversed }
+  -- AJUSTE: Passamos as extensões permitidas para o motor de busca
+  local search_opts = search.SearchOpts.from_tbl {
+    sort_by = self.client.opts.sort_by,
+    sort_reversed = self.client.opts.sort_reversed,
+    allowed_extensions = self.client.opts.allowed_extensions, -- NOVO
+  }
   return search.build_find_cmd(".", nil, search_opts)
 end
 

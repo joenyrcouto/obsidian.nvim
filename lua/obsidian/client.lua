@@ -1872,20 +1872,41 @@ end
 ---
 ---@return obsidian.Note
 Client.write_note = function(self, note, opts)
-  local clone_template = require("obsidian.templates").clone_template
+  local templates = require "obsidian.templates" -- Importamos o motor
   opts = opts or {}
 
   local path = assert(opts.path or note.path, "A path must be provided")
   path = Path.new(path)
 
-  ---@type string
-  local verb
-  if path:is_file() then
-    verb = "Updated"
-  else
-    verb = "Created"
+  if not path:is_file() then
+    -- LÓGICA NOVA: Se não foi passado um template específico, tenta descobrir pela pasta
+    if opts.template == nil then
+      opts.template = templates.get_template_for_path(self, path)
+    end
+
+    -- Se encontrou um template (seja via parâmetro ou via pasta)
     if opts.template ~= nil then
-      note = clone_template { template_name = opts.template, path = path, client = self, note = note }
+      -- Chamamos o clone_template original, mas vamos interceptar o conteúdo depois
+      note = templates.clone_template {
+        template_name = opts.template,
+        path = path,
+        client = self,
+        note = note,
+      }
+
+      -- INTERCEPTAÇÃO: Lê o arquivo criado e traduz a sintaxe Templater
+      local title = note.title or path.stem
+      local f = io.open(tostring(path), "r")
+      if f then
+        local content = f:read "*a"
+        f:close()
+        local translated = templates.translate_templater(content, title, self)
+        local f_write = io.open(tostring(path), "w")
+        if f_write then
+          f_write:write(translated)
+          f_write:close()
+        end
+      end
     end
   end
 
@@ -2101,25 +2122,33 @@ Client.format_link = function(self, note, opts)
   local rel_path, label, note_id
 
   if type(note) == "string" or Path.is_path_obj(note) then
-    -- Aqui dizemos ao LSP que 'note' pode ser tratado como string ou Path
     ---@cast note string|obsidian.Path
     rel_path = tostring(self:vault_relative_path(note, { strict = true }))
+
+    -- VERIFICAÇÃO DE EXTENSÃO
     if not vim.endswith(rel_path, ".md") then
+      -- REGRA: Para não-MD, o label é o nome completo do arquivo (ex: books.base)
       label = opts.label or vim.fs.basename(rel_path)
+      -- REGRA: O note_id deve ser igual ao label para evitar o alias [[id|label]]
+      note_id = opts.id or label
     else
+      -- Comportamento padrão para Markdown
       label = opts.label or tostring(note)
+      note_id = opts.id
     end
-    note_id = opts.id
   else
-    -- Aqui dizemos ao LSP que 'note' é definitivamente um objeto Note
     ---@cast note obsidian.Note
     rel_path = tostring(self:vault_relative_path(note.path, { strict = true }))
+
+    -- VERIFICAÇÃO DE EXTENSÃO
     if not vim.endswith(rel_path, ".md") then
       label = opts.label or vim.fs.basename(rel_path)
+      note_id = opts.id or label
     else
+      -- Comportamento padrão para Markdown
       label = opts.label or note:display_name()
+      note_id = opts.id or note.id
     end
-    note_id = opts.id or note.id
   end
 
   local link_style = opts.link_style
@@ -2127,14 +2156,21 @@ Client.format_link = function(self, note, opts)
     link_style = self.opts.preferred_link_style
   end
 
-  -- Garantimos que o label nunca seja nil para as funções de link
+  -- Se por algum motivo o label ainda for nulo, usamos o rel_path
   label = label or rel_path
 
-  local new_opts = { path = rel_path, label = label, id = note_id, anchor = opts.anchor, block = opts.block }
+  local new_opts = {
+    path = rel_path,
+    label = label,
+    id = note_id,
+    anchor = opts.anchor,
+    block = opts.block,
+  }
 
   if link_style == config.LinkStyle.markdown then
     return self.opts.markdown_link_func(new_opts)
   elseif link_style == config.LinkStyle.wiki or link_style == nil then
+    -- Aqui, se label == id, o resultado será [[books.base]]
     return self.opts.wiki_link_func(new_opts)
   else
     error(string.format("Invalid link style '%s'", link_style))
