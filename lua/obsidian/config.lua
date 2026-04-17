@@ -32,6 +32,8 @@ local config = {}
 ---@field ui obsidian.config.UIOpts | table<string, any>
 ---@field attachments obsidian.config.AttachmentsOpts
 ---@field callbacks obsidian.config.CallbackConfig
+---@field allowed_extensions string[]|?   -- ADICIONADO: Extensões que o plugin pode ler
+---@field writable_extensions string[]|?  -- ADICIONADO: Extensões que o plugin pode editar
 config.ClientOpts = {}
 
 --- Get defaults.
@@ -65,6 +67,8 @@ config.ClientOpts.default = function()
     ui = config.UIOpts.default(),
     attachments = config.AttachmentsOpts.default(),
     callbacks = config.CallbackConfig.default(),
+    allowed_extensions = { ".md" }, -- ADICIONADO: Padrão Obsidian
+    writable_extensions = { ".md" }, -- ADICIONADO: Padrão Obsidian
   }
 end
 
@@ -390,6 +394,8 @@ end
 ---@field date_format string|?
 ---@field time_format string|?
 ---@field substitutions table<string, function|string>|?
+---@field template_mappings table<string, string>|?  -- ADICIONADO: Mapeia pasta -> template
+---@field templater_compat boolean|?                 -- ADICIONADO: Ativa sintaxe <% tp... %>
 config.TemplateOpts = {}
 
 --- Get defaults.
@@ -401,6 +407,8 @@ config.TemplateOpts.default = function()
     date_format = nil,
     time_format = nil,
     substitutions = {},
+    template_mappings = {}, -- ADICIONADO: Padrão vazio
+    templater_compat = false, -- ADICIONADO: Padrão desligado
   }
 end
 
