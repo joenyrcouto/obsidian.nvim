@@ -209,4 +209,8 @@ FzfPicker.pick = function(self, values, opts)
   })
 end
 
+MiniPicker.new = function(client)
+  return Picker.new(MiniPicker, client)
+end
+
 return FzfPicker
