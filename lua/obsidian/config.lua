@@ -476,7 +476,7 @@ config.UIOpts.default = function()
       ObsidianOrange = { bold = true, fg = "#f78c6c" }, -- Cor para os colchetes de erro
       ObsidianError = { fg = "#ff5370", undercurl = true }, -- Cor para o texto do link quebrado
       ObsidianTodo = { bold = true, fg = "#f78c6c" },
-      ObsidianPurple = { fg = "#c792ea", bold = true },
+      ObsidianPurple = { fg = "#c732ea", bold = true },
       ObsidianDone = { bold = true, fg = "#89ddff" },
       ObsidianRightArrow = { bold = true, fg = "#f78c6c" },
       ObsidianTilde = { bold = true, fg = "#ff5370" },
