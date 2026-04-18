@@ -133,13 +133,19 @@ local function check_link_exists(client, link_content)
   local vault_root = tostring(client.dir)
   local search_path = vault_root .. "/**"
 
-  -- 1. Se o link já tem extensão explícita (ex: desenho.excalidraw)
-  if clean:match "%.%w+$" then
-    if vim.fn.findfile(clean, search_path) ~= "" then
-      return true
-    end
-  else
-    -- 2. Se não tem extensão, tenta as permitidas na configuração
+  -- 1. Tenta o nome exato (ex: [[arquivo.pdf]] -> arquivo.pdf)
+  if vim.fn.findfile(clean, search_path) ~= "" then
+    return true
+  end
+
+  -- 2. Caso Excalidraw/Plugins: [[nome.excalidraw]] -> nome.excalidraw.md
+  -- Tentamos anexar .md mesmo que o link já pareça ter uma extensão
+  if vim.fn.findfile(clean .. ".md", search_path) ~= "" then
+    return true
+  end
+
+  -- 3. Se não encontrou e o link NÃO tem extensão óbvia, tenta as permitidas
+  if not clean:match "%.%w+$" then
     local allowed_exts = client.opts.allowed_extensions or { ".md" }
     for _, ext in ipairs(allowed_exts) do
       local dot_ext = vim.startswith(ext, ".") and ext or "." .. ext
@@ -149,7 +155,7 @@ local function check_link_exists(client, link_content)
     end
   end
 
-  -- 3. Verifica se é um diretório
+  -- 4. Verifica se é um diretório
   if vim.fn.isdirectory(vault_root .. "/" .. clean) == 1 then
     return true
   end
