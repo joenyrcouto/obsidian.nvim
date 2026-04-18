@@ -2159,4 +2159,48 @@ Client.get_vault_directories = function(self)
   return relative_dirs
 end
 
+--- Resolve o diretório de imagens absoluto baseado na configuração do usuário.
+---@return obsidian.Path
+Client.img_dir = function(self)
+  local img_folder = self.opts.attachments.img_folder or "assets/imgs"
+  local path = self.dir / img_folder
+  path:mkdir { parents = true, exists_ok = true }
+  return path
+end
+
+--- Lógica robusta para colar imagem da área de transferência.
+Client.paste_image = function(self)
+  local img_dir = self:img_dir()
+
+  vim.ui.input({ prompt = "Nome da imagem: " }, function(name)
+    if not name or name == "" then
+      name = "img_" .. os.date "%Y%m%d%H%M%S"
+    end
+
+    local img_path = img_dir / (name .. ".png")
+    local cmd
+
+    -- Detecta o comando correto por Sistema Operacional
+    if vim.fn.has "mac" == 1 then
+      cmd = string.format("pngpaste %s", vim.fn.shellescape(tostring(img_path)))
+    else
+      cmd = string.format("xclip -selection clipboard -t image/png -o > %s", vim.fn.shellescape(tostring(img_path)))
+    end
+
+    -- Executa a colagem
+    local output = vim.fn.system(cmd)
+    if vim.v.shell_error ~= 0 then
+      log.err "Falha ao colar imagem. Certifique-se de que há uma imagem na área de transferência."
+      return
+    end
+
+    -- Insere o texto no buffer usando a função configurada pelo usuário
+    if img_path:exists() then
+      local text = self.opts.attachments.img_text_func(self, img_path)
+      vim.api.nvim_put({ text }, "c", true, true)
+      log.info("Imagem salva em: " .. tostring(self:vault_relative_path(img_path)))
+    end
+  end)
+end
+
 return Client

@@ -34,6 +34,10 @@ local config = {}
 ---@field callbacks obsidian.config.CallbackConfig
 ---@field allowed_extensions string[]|?   -- ADICIONADO: Extensões que o plugin pode ler
 ---@field writable_extensions string[]|?  -- ADICIONADO: Extensões que o plugin pode editar
+---@field img_folder string
+---@field img_name_func (fun(): string)|?
+---@field img_text_func fun(client: obsidian.Client, path: obsidian.Path): string
+---@field confirm_img_paste boolean
 config.ClientOpts = {}
 
 --- Get defaults.
@@ -69,6 +73,13 @@ config.ClientOpts.default = function()
     callbacks = config.CallbackConfig.default(),
     allowed_extensions = { ".md" }, -- ADICIONADO: Padrão Obsidian
     writable_extensions = { ".md" }, -- ADICIONADO: Padrão Obsidian
+    img_folder = "assets/imgs", -- Padrão de contingência
+    img_text_func = function(client, path)
+      -- Transforma o caminho absoluto em relativo ao vault e cria o link [[...]]
+      path = client:vault_relative_path(path) or path
+      return string.format("![[%s]]", path)
+    end,
+    confirm_img_paste = true,
   }
 end
 
