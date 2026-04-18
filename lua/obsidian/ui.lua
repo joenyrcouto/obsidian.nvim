@@ -11,59 +11,46 @@ local M = {}
 
 local NAMESPACE = "ObsidianUI"
 
--- NOVO: Variáveis de estado para Modo Edição e Cache
+-- Estado Global: Modo Edição e Cache de Performance
 M._paused = false
 M._link_existence_cache = {}
 M._last_cache_clear = os.time()
 
+--- Instala os grupos de destaque necessários
 ---@param ui_opts obsidian.config.UIOpts
 local function install_hl_groups(ui_opts)
   for group_name, opts in pairs(ui_opts.hl_groups) do
     vim.api.nvim_set_hl(0, group_name, opts)
   end
-  -- Grupos de destaque para links quebrados (Alta Prioridade)
+  -- Cores exclusivas para links quebrados (Prioridade Máxima)
   vim.api.nvim_set_hl(0, "ObsidianOrange", { fg = "#f78c6c", bold = true })
   vim.api.nvim_set_hl(0, "ObsidianError", { fg = "#ff5370", bold = true, undercurl = true })
 end
 
--- We cache marks locally to help avoid redrawing marks when its not necessary.
+-- Cache local para evitar redesenho desnecessário
 M._buf_mark_cache = DefaultTbl.new(DefaultTbl.with_tbl)
 
----@param bufnr integer
----@param ns_id integer
----@param mark_id integer
----@return ExtMark|?
 local function cache_get(bufnr, ns_id, mark_id)
-  local buf_ns_cache = M._buf_mark_cache[bufnr][ns_id]
-  return buf_ns_cache[mark_id]
+  return M._buf_mark_cache[bufnr][ns_id][mark_id]
 end
 
----@param bufnr integer
----@param ns_id integer
----@param mark ExtMark
----@return ExtMark|?
 local function cache_set(bufnr, ns_id, mark)
   assert(mark.id ~= nil)
   M._buf_mark_cache[bufnr][ns_id][mark.id] = mark
 end
 
----@param bufnr integer
----@param ns_id integer
----@param mark_id integer
 local function cache_evict(bufnr, ns_id, mark_id)
   M._buf_mark_cache[bufnr][ns_id][mark_id] = nil
 end
 
----@param bufnr integer
----@param ns_id integer
 local function cache_clear(bufnr, ns_id)
   M._buf_mark_cache[bufnr][ns_id] = {}
 end
 
 ---@class ExtMark : obsidian.ABC
----@field id integer|? ID of the mark
----@field row integer 0-based row index
----@field col integer 0-based col index
+---@field id integer|?
+---@field row integer
+---@field col integer
 ---@field opts ExtMarkOpts
 local ExtMark = abc.new_class {
   __eq = function(a, b)
@@ -74,18 +61,9 @@ local ExtMark = abc.new_class {
 M.ExtMark = ExtMark
 
 ---@class ExtMarkOpts : obsidian.ABC
----@field end_row integer
----@field end_col integer
----@field conceal string|?
----@field hl_group string|?
----@field spell boolean|?
----@field priority integer|?
 local ExtMarkOpts = abc.new_class()
-
 M.ExtMarkOpts = ExtMarkOpts
 
----@param data table
----@return ExtMarkOpts
 ExtMarkOpts.from_tbl = function(data)
   local self = ExtMarkOpts.init()
   self.end_row = data.end_row
@@ -97,8 +75,6 @@ ExtMarkOpts.from_tbl = function(data)
   return self
 end
 
----@param self ExtMarkOpts
----@return table
 ExtMarkOpts.to_tbl = function(self)
   return {
     end_row = self.end_row,
@@ -110,11 +86,6 @@ ExtMarkOpts.to_tbl = function(self)
   }
 end
 
----@param id integer|?
----@param row integer
----@param col integer
----@param opts ExtMarkOpts
----@return ExtMark
 ExtMark.new = function(id, row, col, opts)
   local self = ExtMark.init()
   self.id = id
@@ -124,11 +95,6 @@ ExtMark.new = function(id, row, col, opts)
   return self
 end
 
----Materialize the ExtMark if needed.
----@param self ExtMark
----@param bufnr integer
----@param ns_id integer
----@return ExtMark
 ExtMark.materialize = function(self, bufnr, ns_id)
   if self.id == nil then
     self.id = vim.api.nvim_buf_set_extmark(bufnr, ns_id, self.row, self.col, self.opts:to_tbl())
@@ -137,10 +103,6 @@ ExtMark.materialize = function(self, bufnr, ns_id)
   return self
 end
 
----@param self ExtMark
----@param bufnr integer
----@param ns_id integer
----@return boolean
 ExtMark.clear = function(self, bufnr, ns_id)
   if self.id ~= nil then
     cache_evict(bufnr, ns_id, self.id)
@@ -150,15 +112,9 @@ ExtMark.clear = function(self, bufnr, ns_id)
   end
 end
 
----Collect all existing (materialized) marks within a region.
----@param bufnr integer
----@param ns_id integer
----@param region_start integer|integer[]|?
----@param region_end integer|integer[]|?
----@return ExtMark[]
 ExtMark.collect = function(bufnr, ns_id, region_start, region_end)
-  region_start = region_start and region_start or 0
-  region_end = region_end and region_end or -1
+  region_start = region_start or 0
+  region_end = region_end or -1
   local marks = {}
   for data in iter(vim.api.nvim_buf_get_extmarks(bufnr, ns_id, region_start, region_end, { details = true })) do
     local mark = ExtMark.new(data[1], data[2], data[3], ExtMarkOpts.from_tbl(data[4]))
@@ -172,17 +128,15 @@ ExtMark.collect = function(bufnr, ns_id, region_start, region_end)
   return marks
 end
 
----Clear all existing (materialized) marks with a line region.
 ExtMark.clear_range = function(bufnr, ns_id, line_start, line_end)
   return vim.api.nvim_buf_clear_namespace(bufnr, ns_id, line_start, line_end)
 end
 
----Clear all existing (materialized) marks on a line.
 ExtMark.clear_line = function(bufnr, ns_id, line)
   return ExtMark.clear_range(bufnr, ns_id, line, line + 1)
 end
 
---- NOVO: Validação de existência de arquivo (Com Cache e findfile)
+--- Validação de Link com Cache e suporte a .md oculto (Excalidraw)
 local function check_link_exists(client, link_content)
   local now = os.time()
   if now - M._last_cache_clear > 5 then
@@ -203,11 +157,14 @@ local function check_link_exists(client, link_content)
   local search_path = vault_root .. "/**"
   local found = false
 
+  -- 1. Tenta o nome exato
   if vim.fn.findfile(clean, search_path) ~= "" then
     found = true
+  -- 2. Caso Excalidraw/Plugins (.md oculto no disco)
   elseif vim.fn.findfile(clean .. ".md", search_path) ~= "" then
     found = true
   else
+    -- 3. Tenta as extensões permitidas
     local allowed_exts = client.opts.allowed_extensions or { ".md" }
     for _, ext in ipairs(allowed_exts) do
       local dot_ext = vim.startswith(ext, ".") and ext or "." .. ext
@@ -225,60 +182,12 @@ local function check_link_exists(client, link_content)
   return found
 end
 
----@param marks ExtMark[]
----@param line string
----@param lnum integer
----@param ui_opts obsidian.config.UIOpts
----@return ExtMark[]
-local function get_line_check_extmarks(marks, line, lnum, ui_opts)
-  for char, opts in pairs(ui_opts.checkboxes) do
-    if string.match(line, "^%s*- %[" .. util.escape_magic_characters(char) .. "%]") then
-      local indent = util.count_indent(line)
-      marks[#marks + 1] = ExtMark.new(
-        nil,
-        lnum,
-        indent,
-        ExtMarkOpts.from_tbl {
-          end_row = lnum,
-          end_col = indent + 5,
-          conceal = opts.char,
-          hl_group = opts.hl_group,
-        }
-      )
-      return marks
-    end
-  end
-
-  if ui_opts.bullets ~= nil and string.match(line, "^%s*[-%*%+] ") then
-    local indent = util.count_indent(line)
-    marks[#marks + 1] = ExtMark.new(
-      nil,
-      lnum,
-      indent,
-      ExtMarkOpts.from_tbl {
-        end_row = lnum,
-        end_col = indent + 1,
-        conceal = ui_opts.bullets.char,
-        hl_group = ui_opts.bullets.hl_group,
-      }
-    )
-  end
-
-  return marks
-end
-
----@param marks ExtMark[]
----@param line string
----@param lnum integer
----@param ui_opts obsidian.config.UIOpts
----@param client obsidian.Client|?
----@return ExtMark[]
+--- Processa Referências (Links, Tags, BlockIDs)
 local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
   local matches = search.find_refs(line, { include_naked_urls = true, include_tags = true, include_block_ids = true })
   for match in iter(matches) do
     local m_start, m_end, m_type = unpack(match)
 
-    -- Lógica de Link Quebrado
     local is_broken = false
     if m_type == search.RefTypes.Wiki or m_type == search.RefTypes.WikiWithAlias then
       local content = line:sub(m_start + 2, m_end - 2)
@@ -289,6 +198,7 @@ local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
 
     if is_broken then
       local col_0 = m_start - 1
+      -- Destaque de Link Quebrado (Prioridade 250 para vencer outros plugins)
       marks[#marks + 1] = ExtMark.new(
         nil,
         lnum,
@@ -393,28 +303,6 @@ local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
           ExtMarkOpts.from_tbl { end_row = lnum, end_col = m_end, conceal = is_url and " " or "" }
         )
       end
-    elseif m_type == search.RefTypes.NakedUrl then
-      local domain_start = string.find(line, "://", m_start, true)
-      if domain_start then
-        domain_start = domain_start + 3
-        marks[#marks + 1] = ExtMark.new(
-          nil,
-          lnum,
-          m_start - 1,
-          ExtMarkOpts.from_tbl { end_row = lnum, end_col = domain_start - 1, conceal = "" }
-        )
-        marks[#marks + 1] = ExtMark.new(
-          nil,
-          lnum,
-          m_start - 1,
-          ExtMarkOpts.from_tbl {
-            end_row = lnum,
-            end_col = m_end,
-            hl_group = ui_opts.reference_text.hl_group,
-            spell = false,
-          }
-        )
-      end
     elseif m_type == search.RefTypes.Tag then
       marks[#marks + 1] = ExtMark.new(
         nil,
@@ -434,37 +322,7 @@ local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
   return marks
 end
 
----@param marks ExtMark[]
----@param line string
----@param lnum integer
----@param ui_opts obsidian.config.UIOpts
----@return ExtMark[]
-local function get_line_highlight_extmarks(marks, line, lnum, ui_opts)
-  local matches = search.find_highlight(line)
-  for match in iter(matches) do
-    local m_start, m_end = match[1], match[2]
-    marks[#marks + 1] =
-      ExtMark.new(nil, lnum, m_start - 1, ExtMarkOpts.from_tbl { end_row = lnum, end_col = m_start + 1, conceal = "" })
-    marks[#marks + 1] = ExtMark.new(
-      nil,
-      lnum,
-      m_start + 1,
-      ExtMarkOpts.from_tbl {
-        end_row = lnum,
-        end_col = m_end - 2,
-        hl_group = ui_opts.highlight_text.hl_group,
-        spell = false,
-      }
-    )
-    marks[#marks + 1] =
-      ExtMark.new(nil, lnum, m_end - 2, ExtMarkOpts.from_tbl { end_row = lnum, end_col = m_end, conceal = "" })
-  end
-  return marks
-end
-
----@param bufnr integer
----@param ns_id integer
----@param ui_opts obsidian.config.UIOpts
+--- Atualiza as marcações visuais no buffer
 local function update_extmarks(bufnr, ns_id, ui_opts)
   if M._paused then
     return
@@ -486,9 +344,7 @@ local function update_extmarks(bufnr, ns_id, ui_opts)
       ExtMark.clear_line(bufnr, ns_id, lnum)
     elseif not inside_code_block then
       local new_line_marks = {}
-      get_line_check_extmarks(new_line_marks, line, lnum, ui_opts)
       get_line_ref_extmarks(new_line_marks, line, lnum, ui_opts, client)
-      get_line_highlight_extmarks(new_line_marks, line, lnum, ui_opts)
 
       if #new_line_marks > 0 then
         for mark in iter(new_line_marks) do
@@ -510,9 +366,7 @@ local function update_extmarks(bufnr, ns_id, ui_opts)
   end
 end
 
----@param ui_opts obsidian.config.UIOpts
----@param bufnr integer|?
----@return boolean
+--- Verifica se o buffer deve receber atualizações de UI
 local function should_update(ui_opts, bufnr)
   if ui_opts.enable == false or M._paused then
     return false
@@ -520,6 +374,7 @@ local function should_update(ui_opts, bufnr)
   bufnr = bufnr or 0
   local name = vim.api.nvim_buf_get_name(bufnr)
   local client = require("obsidian").get_client()
+  -- Restrição rigorosa ao Vault
   if client and not client:path_is_note(name) then
     return false
   end
@@ -529,7 +384,7 @@ local function should_update(ui_opts, bufnr)
   return true
 end
 
---- NOVO: Função de Toggle (Modo Edição)
+--- Alterna entre Modo Visual e Modo Edição (Toggle)
 M.toggle_ui = function(client)
   M._paused = not M._paused
   local ns_id = vim.api.nvim_create_namespace(NAMESPACE)
@@ -544,9 +399,6 @@ M.toggle_ui = function(client)
   end
 end
 
----@param ui_opts obsidian.config.UIOpts
----@param throttle boolean
----@return function
 local function get_extmarks_autocmd_callback(ui_opts, throttle)
   local ns_id = vim.api.nvim_create_namespace(NAMESPACE)
   local callback = function(ev)
@@ -557,7 +409,6 @@ local function get_extmarks_autocmd_callback(ui_opts, throttle)
   return throttle and require("obsidian.async").throttle(callback, ui_opts.update_debounce) or callback
 end
 
----Manually update extmarks.
 M.update = function(ui_opts, bufnr)
   bufnr = bufnr or 0
   if should_update(ui_opts, bufnr) then
@@ -565,8 +416,6 @@ M.update = function(ui_opts, bufnr)
   end
 end
 
----@param workspace obsidian.Workspace
----@param ui_opts obsidian.config.UIOpts
 M.setup = function(workspace, ui_opts)
   if ui_opts.enable == false then
     return
