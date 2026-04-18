@@ -11,7 +11,7 @@ local M = {}
 
 local NAMESPACE = "ObsidianUI"
 
--- NOVO: Estado Global para Modo Edição e Cache de Performance
+-- Estado Global: Modo Edição e Cache de Performance
 M._paused = false
 M._link_existence_cache = {}
 M._last_cache_clear = os.time()
@@ -22,10 +22,16 @@ local function install_hl_groups(ui_opts)
   for group_name, opts in pairs(ui_opts.hl_groups) do
     vim.api.nvim_set_hl(0, group_name, opts)
   end
-  -- Cores exclusivas do seu fork (Prioridade Máxima)
+
+  -- Cores exclusivas do seu fork com SUBINHADO (underline)
+  -- 1. Colchetes de erro
   vim.api.nvim_set_hl(0, "ObsidianOrange", { fg = "#f78c6c", bold = true })
-  vim.api.nvim_set_hl(0, "ObsidianError", { fg = "#ff5370", bold = true, undercurl = true })
-  vim.api.nvim_set_hl(0, "ObsidianPurple", { fg = "#c792ea", bold = true })
+
+  -- 2. Texto de link quebrado (Vermelho + Negrito + Sublinhado)
+  vim.api.nvim_set_hl(0, "ObsidianError", { fg = "#ff5370", bold = true, underline = true })
+
+  -- 3. Texto de link válido (Roxo + Negrito + Sublinhado)
+  vim.api.nvim_set_hl(0, "ObsidianPurple", { fg = "#c792ea", bold = true, underline = true })
 end
 
 -- Cache local para evitar redesenho desnecessário de extmarks
@@ -180,7 +186,7 @@ ExtMark.clear_line = function(bufnr, ns_id, line)
   return ExtMark.clear_range(bufnr, ns_id, line, line + 1)
 end
 
---- NOVO: Validação de Link com Cache e suporte a .md oculto (Excalidraw)
+--- Validação de Link com Cache e suporte a .md oculto (Excalidraw)
 local function check_link_exists(client, link_content)
   local now = os.time()
   if now - M._last_cache_clear > 5 then
@@ -290,7 +296,7 @@ local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
 
     if is_broken then
       local col_0 = m_start - 1
-      -- Link Quebrado: Laranja + Vermelho (Prioridade 250)
+      -- Link Quebrado: Laranja + Vermelho Sublinhado (Prioridade 250)
       marks[#marks + 1] = ExtMark.new(
         nil,
         lnum,
@@ -330,7 +336,7 @@ local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
       if pipe_loc then
         marks[#marks + 1] =
           ExtMark.new(nil, lnum, m_start - 1, ExtMarkOpts.from_tbl { end_row = lnum, end_col = pipe_loc, conceal = "" })
-        -- Link Válido: Roxo (Prioridade 200)
+        -- Link Válido: Roxo Sublinhado (Prioridade 200)
         marks[#marks + 1] = ExtMark.new(
           nil,
           lnum,
@@ -353,7 +359,7 @@ local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
         m_start - 1,
         ExtMarkOpts.from_tbl { end_row = lnum, end_col = m_start + 1, conceal = "" }
       )
-      -- Link Válido: Roxo (Prioridade 200)
+      -- Link Válido: Roxo Sublinhado (Prioridade 200)
       marks[#marks + 1] = ExtMark.new(
         nil,
         lnum,
@@ -374,7 +380,7 @@ local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
         local is_url = util.is_url(string.sub(line, closing + 2, m_end - 1))
         marks[#marks + 1] =
           ExtMark.new(nil, lnum, m_start - 1, ExtMarkOpts.from_tbl { end_row = lnum, end_col = m_start, conceal = "" })
-        -- Link Válido: Roxo (Prioridade 200)
+        -- Link Válido: Roxo Sublinhado (Prioridade 200)
         marks[#marks + 1] = ExtMark.new(
           nil,
           lnum,
@@ -548,7 +554,7 @@ local function should_update(ui_opts, bufnr)
   return true
 end
 
---- NOVO: Função de Toggle (Modo Edição)
+--- Alterna entre Modo Visual e Modo Edição (Toggle)
 M.toggle_ui = function(client)
   M._paused = not M._paused
   local ns_id = vim.api.nvim_create_namespace(NAMESPACE)
