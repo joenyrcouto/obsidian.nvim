@@ -179,8 +179,9 @@ ExtMark.clear_line = function(bufnr, ns_id, line)
   return ExtMark.clear_range(bufnr, ns_id, line, line + 1)
 end
 
---- NOVO: Validação de existência de arquivo (Inversão de Controle)
+--- Valida se o arquivo do link existe no vault
 local function check_link_exists(client, link_content)
+  -- Limpa alias e âncoras: [[Link#Ancora|Alias]] -> Link
   local clean = link_content:match "([^#|]+)" or link_content
   clean = vim.trim(clean)
   if #clean == 0 then
@@ -190,23 +191,26 @@ local function check_link_exists(client, link_content)
   local allowed_exts = client.opts.allowed_extensions or { ".md" }
   local vault_root = tostring(client.dir)
 
-  local has_ext = false
-  for _, ext in ipairs(allowed_exts) do
-    if vim.endswith(clean, ext) then
-      has_ext = true
-      break
-    end
-  end
-
-  if has_ext then
+  -- NOVO/CORRIGIDO: Se o link já tem QUALQUER extensão explícita (ex: .excalidraw, .pdf, .png)
+  -- nós apenas verificamos se o arquivo existe no disco, sem travar na lista de allowed_extensions.
+  if clean:match "%.%w+$" then
     return #vim.fn.globpath(vault_root, "**/" .. clean, false, true) > 0
   else
+    -- Se o link NÃO tem extensão (ex: [[Minha Nota]]), aí sim tentamos
+    -- anexar as extensões de escrita/leitura permitidas para ver se o arquivo existe.
     for _, ext in ipairs(allowed_exts) do
-      if #vim.fn.globpath(vault_root, "**/" .. clean .. ext, false, true) > 0 then
+      -- Garante que a extensão comece com ponto
+      local dot_ext = ext
+      if not vim.startswith(dot_ext, ".") then
+        dot_ext = "." .. dot_ext
+      end
+
+      if #vim.fn.globpath(vault_root, "**/" .. clean .. dot_ext, false, true) > 0 then
         return true
       end
     end
   end
+
   return false
 end
 
