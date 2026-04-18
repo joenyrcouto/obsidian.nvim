@@ -2186,4 +2186,26 @@ Client.picker = function(self, picker_name)
   return require("obsidian.pickers").get(self, picker_name)
 end
 
+--- Get all directories in the vault.
+---@return string[]
+Client.get_vault_directories = function(self)
+  local scan = require "plenary.scandir"
+  local dirs = scan.scan_dir(tostring(self.dir), {
+    add_dirs = true,
+    only_dirs = true,
+    respect_gitignore = true,
+    hidden = false,
+  })
+
+  local relative_dirs = { "" } -- Inclui a raiz
+  for _, dir in ipairs(dirs) do
+    local rel = self:vault_relative_path(dir)
+    if rel then
+      table.insert(relative_dirs, tostring(rel))
+    end
+  end
+  table.sort(relative_dirs)
+  return relative_dirs
+end
+
 return Client

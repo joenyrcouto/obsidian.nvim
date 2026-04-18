@@ -88,6 +88,26 @@ Picker.pick = function(self, values, opts)
   error "not implemented"
 end
 
+--- Pick a directory from the vault.
+---@param callback fun(dir: string)
+Picker.pick_directory = function(self, callback)
+  local directories = self.client:get_vault_directories()
+  local entries = {}
+  for _, dir in ipairs(directories) do
+    table.insert(entries, {
+      display = dir == "" and "/" or dir,
+      value = dir,
+    })
+  end
+
+  self:pick(entries, {
+    prompt_title = "Select Directory",
+    callback = function(entry)
+      callback(entry)
+    end,
+  })
+end
+
 --------------------------------
 --- Concrete helper methods. ---
 --------------------------------

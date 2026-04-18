@@ -39,7 +39,7 @@ local resolve_template = function(template_name, client)
   return template_path
 end
 
---- NOVO: Resolve qual template usar baseado na pasta de destino (Mapeamento por Diretório)
+--- Resolve qual template usar baseado na pasta de destino (Mapeamento por Diretório)
 ---@param client obsidian.Client
 ---@param path obsidian.Path
 ---@return string|?
@@ -60,7 +60,11 @@ M.get_template_for_path = function(client, path)
   end)
 
   for _, dir in ipairs(keys) do
-    if vim.startswith(rel_path_str, dir) then
+    -- Remove leading slash para comparação
+    local clean_dir = dir:gsub("^/", "")
+    local clean_rel = rel_path_str:gsub("^/", "")
+
+    if clean_rel == clean_dir or vim.startswith(clean_rel, clean_dir .. "/") then
       return mappings[dir]
     end
   end
@@ -76,6 +80,7 @@ end
 ---@return string
 M.substitute_template_variables = function(text, client, note)
   local methods = vim.deepcopy(client.opts.templates.substitutions or {})
+  local title = note.title or note:display_name()
 
   -- 1. Definições de Variáveis Padrão
   if not methods["date"] then
@@ -93,7 +98,7 @@ M.substitute_template_variables = function(text, client, note)
   end
 
   if not methods["title"] then
-    methods["title"] = note.title or note:display_name()
+    methods["title"] = title
   end
 
   if not methods["id"] then
@@ -113,14 +118,27 @@ M.substitute_template_variables = function(text, client, note)
     end
   end
 
-  -- 3. COMPATIBILIDADE TEMPLATER: <% tp... %>
+  -- 3. COMPATIBILIDADE TEMPLATER: <% tp... %> (Baseado na sua lógica antiga)
   if client.opts.templates.templater_compat then
-    -- Tradução de Título: <% tp.file.title %>
-    text = text:gsub("<%% tp%.file%.title %%>", methods["title"])
+    local now = os.date
+    local d = now "%Y-%m-%d"
+    local t = now "%H:%M"
 
-    -- Tradução de Datas: <% tp.date.now("format") %>
+    -- Mapeamento de padrões específicos do Templater
+    local patterns = {
+      { '<%% tp%.date%.now%("YYYY%-MM%-DD HH:mm"%) %%>', d .. " " .. t },
+      { '<%% tp%.date%.now%("YYYY%-MM%-DDTHH:mm"%) %%>', d .. "T" .. t },
+      { '<%% tp%.date%.now%("YYYY%-MM%-DD"%) %%>', d },
+      { "<%% tp%.date%.now%(%) %%>", d },
+      { "<%% tp%.file%.title %%>", title },
+    }
+
+    for _, pat in ipairs(patterns) do
+      text = text:gsub(pat[1], pat[2])
+    end
+
+    -- Suporte genérico para <% tp.date.now("formato") %>
     text = text:gsub('<%% tp%.date%.now%("(.-)"%) %%>', function(fmt)
-      -- Converte formatos Moment.js comuns para Lua
       local lua_fmt = fmt
         :gsub("YYYY", "%%Y")
         :gsub("MM", "%%m")
@@ -130,9 +148,6 @@ M.substitute_template_variables = function(text, client, note)
         :gsub("ss", "%%S")
       return os.date(lua_fmt)
     end)
-
-    -- Tradução de Data Simples: <% tp.date.now() %>
-    text = text:gsub("<%% tp%.date%.now%(%) %%>", os.date "%Y-%m-%d")
   end
 
   -- 4. Prompt para variáveis desconhecidas {{prompt}}
@@ -167,7 +182,8 @@ M.clone_template = function(opts)
     local note_file = io.open(tostring(note_path), "w")
     if note_file then
       local title = opts.note.title or note_path.stem
-      local header = string.format("---\ntitle: %s\ndate: %s\n---\n\n# %s\n", title, os.date "%Y-%m-%d %H:%M", title)
+      local header =
+        string.format("---\ntitle: %s\ndate: %s %s\n---\n\n# %s\n", title, os.date "%Y-%m-%d", os.date "%H:%M", title)
       note_file:write(header)
       note_file:close()
     end
