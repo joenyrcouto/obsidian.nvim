@@ -1635,13 +1635,10 @@ Client.new_note_id = function(self, title)
     return self.opts.note_id_func(title)
   end
 
-  -- MODIFICAÇÃO: Se o título já tem uma extensão permitida, o ID é o próprio título
-  if title then
-    for _, ext in ipairs(self.opts.allowed_extensions or { ".md" }) do
-      if vim.endswith(title, ext) then
-        return title
-      end
-    end
+  -- MODIFICAÇÃO: Se o usuário digitou um título, usamos ele como nome do arquivo (ID)
+  -- Isso evita nomes aleatórios quando o usuário digita algo sem extensão.
+  if title and string.len(title) > 0 then
+    return title
   end
 
   return util.zettel_id()
@@ -1730,6 +1727,7 @@ Client.parse_title_id_path = function(self, title, id, dir)
     id, _, parent = parse_as_path(id, false)
   elseif title then
     local check_s, is_p, parent_p = parse_as_path(title, true)
+    -- Se o título parece um caminho ou tem extensão, ele vira o ID
     if is_p then
       id = title
       title = check_s
@@ -1762,6 +1760,7 @@ Client.parse_title_id_path = function(self, title, id, dir)
 
   assert(base_dir:is_absolute())
 
+  -- Se não foi detectado como path, gera o ID (Zettel ou Título)
   if not id then
     id = self:new_note_id(title)
   end
