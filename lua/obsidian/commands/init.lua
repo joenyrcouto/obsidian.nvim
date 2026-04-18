@@ -26,6 +26,8 @@ local command_lookups = {
   ObsidianExtractNote = "obsidian.commands.extract_note",
   ObsidianDebug = "obsidian.commands.debug",
   ObsidianTOC = "obsidian.commands.toc",
+  -- NOVO: Adicionado para consistência, embora usaremos a função inline abaixo
+  ObsidianToggleUI = "obsidian.ui",
 }
 
 local M = setmetatable({
@@ -190,5 +192,13 @@ M.register(
 M.register("ObsidianDebug", { opts = { nargs = 0, desc = "Log some information for debugging" } })
 
 M.register("ObsidianTOC", { opts = { nargs = 0, desc = "Load the table of contents into a picker" } })
+
+-- NOVO: Registro do comando de Toggle UI
+M.register("ObsidianToggleUI", {
+  opts = { nargs = 0, desc = "Toggle Obsidian UI (Edit Mode)" },
+  func = function(client, _)
+    require("obsidian.ui").toggle_ui(client)
+  end,
+})
 
 return M
