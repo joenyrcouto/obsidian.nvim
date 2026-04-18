@@ -8,6 +8,8 @@ local iter = require("obsidian.itertools").iter
 local strings = require "plenary.strings"
 
 local M = {}
+M._link_existence_cache = {}
+M._last_cache_clear = os.time()
 
 local NAMESPACE = "ObsidianUI"
 
@@ -124,6 +126,19 @@ end
 
 --- Valida se o arquivo do link existe no vault (Usando findfile para maior precisão)
 local function check_link_exists(client, link_content)
+  local now = os.time()
+
+  -- Limpa o cache a cada 5 segundos para detectar novos arquivos criados
+  if now - M._last_cache_clear > 5 then
+    M._link_existence_cache = {}
+    M._last_cache_clear = now
+  end
+
+  -- Se já validamos este link recentemente, retorna o resultado salvo
+  if M._link_existence_cache[link_content] ~= nil then
+    return M._link_existence_cache[link_content]
+  end
+
   local clean = link_content:match "([^#|]+)" or link_content
   clean = vim.trim(clean)
   if #clean == 0 then
@@ -132,70 +147,34 @@ local function check_link_exists(client, link_content)
 
   local vault_root = tostring(client.dir)
   local search_path = vault_root .. "/**"
+  local found = false
 
-  -- 1. Tenta o nome exato (ex: [[arquivo.pdf]] -> arquivo.pdf)
+  -- 1. Tenta o nome exato
   if vim.fn.findfile(clean, search_path) ~= "" then
-    return true
-  end
-
-  -- 2. Caso Excalidraw/Plugins: [[nome.excalidraw]] -> nome.excalidraw.md
-  -- Tentamos anexar .md mesmo que o link já pareça ter uma extensão
-  if vim.fn.findfile(clean .. ".md", search_path) ~= "" then
-    return true
-  end
-
-  -- 3. Se não encontrou e o link NÃO tem extensão óbvia, tenta as permitidas
-  if not clean:match "%.%w+$" then
+    found = true
+  -- 2. Caso Excalidraw/Plugins (.md oculto)
+  elseif vim.fn.findfile(clean .. ".md", search_path) ~= "" then
+    found = true
+  else
+    -- 3. Tenta as extensões permitidas
     local allowed_exts = client.opts.allowed_extensions or { ".md" }
     for _, ext in ipairs(allowed_exts) do
       local dot_ext = vim.startswith(ext, ".") and ext or "." .. ext
       if vim.fn.findfile(clean .. dot_ext, search_path) ~= "" then
-        return true
+        found = true
+        break
       end
     end
   end
 
   -- 4. Verifica se é um diretório
-  if vim.fn.isdirectory(vault_root .. "/" .. clean) == 1 then
-    return true
+  if not found and vim.fn.isdirectory(vault_root .. "/" .. clean) == 1 then
+    found = true
   end
 
-  return false
-end
-
-local function get_line_check_extmarks(marks, line, lnum, ui_opts)
-  for char, opts in pairs(ui_opts.checkboxes) do
-    if string.match(line, "^%s*- %[" .. util.escape_magic_characters(char) .. "%]") then
-      local indent = util.count_indent(line)
-      marks[#marks + 1] = ExtMark.new(
-        nil,
-        lnum,
-        indent,
-        ExtMarkOpts.from_tbl {
-          end_row = lnum,
-          end_col = indent + 5,
-          conceal = opts.char,
-          hl_group = opts.hl_group,
-        }
-      )
-      return marks
-    end
-  end
-  if ui_opts.bullets ~= nil and string.match(line, "^%s*[-%*%+] ") then
-    local indent = util.count_indent(line)
-    marks[#marks + 1] = ExtMark.new(
-      nil,
-      lnum,
-      indent,
-      ExtMarkOpts.from_tbl {
-        end_row = lnum,
-        end_col = indent + 1,
-        conceal = ui_opts.bullets.char,
-        hl_group = ui_opts.bullets.hl_group,
-      }
-    )
-  end
-  return marks
+  -- Salva no cache e retorna
+  M._link_existence_cache[link_content] = found
+  return found
 end
 
 local function get_line_ref_extmarks(marks, line, lnum, ui_opts, client)
