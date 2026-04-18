@@ -189,8 +189,10 @@ end
 Client.path_is_note = function(self, path, workspace)
   path = Path.new(path):resolve()
 
+  -- MODIFICAÇÃO: Verificação dinâmica de extensões permitidas
   local is_allowed = false
-  for _, ext in ipairs(self.opts.allowed_extensions) do
+  local allowed_exts = self.opts.allowed_extensions or { ".md" }
+  for _, ext in ipairs(allowed_exts) do
     if vim.endswith(path.filename, ext) then
       is_allowed = true
       break
@@ -201,7 +203,7 @@ Client.path_is_note = function(self, path, workspace)
     return false
   end
 
-  -- Ignore markdown files in the templates directory.
+  -- Ignore files in the templates directory.
   local templates_dir = self:templates_dir(workspace)
   if templates_dir ~= nil then
     if templates_dir:is_parent_of(path) then
@@ -377,6 +379,9 @@ Client._prepare_search_opts = function(self, opts, additional_opts)
   if opts.ignore_case then
     search_opts.ignore_case = true
   end
+
+  -- MODIFICAÇÃO: Injeta as extensões permitidas no motor de busca
+  search_opts.allowed_extensions = self.opts.allowed_extensions
 
   if additional_opts ~= nil then
     search_opts = search_opts:merge(additional_opts)
@@ -635,8 +640,10 @@ Client.resolve_note_async = function(self, query, callback, opts)
 
   -- Query might be a path.
   local fname = query
+  -- MODIFICAÇÃO: Verifica se o link já tem uma extensão permitida
   local has_ext = false
-  for _, ext in ipairs(self.opts.allowed_extensions) do
+  local allowed_exts = self.opts.allowed_extensions or { ".md" }
+  for _, ext in ipairs(allowed_exts) do
     if vim.endswith(fname, ext) then
       has_ext = true
       break
@@ -1573,14 +1580,12 @@ Client.apply_async_raw = function(self, on_path, opts)
 
   local executor = AsyncExecutor.new()
 
-  -- NOVO: Construção dinâmica do padrão de busca baseado nas extensões permitidas
+  -- MODIFICAÇÃO: Construção dinâmica do padrão de busca baseado nas extensões permitidas
   local allowed_exts = self.opts.allowed_extensions or { ".md" }
   local pattern_parts = {}
   for _, ext in ipairs(allowed_exts) do
-    -- Remove o ponto inicial e escapa para o padrão Lua (ex: .md -> md)
     table.insert(pattern_parts, ext:gsub("^%.", ""))
   end
-  -- Cria um padrão como: ".*%.(md|txt|org)$"
   local dynamic_pattern = ".*%.(" .. table.concat(pattern_parts, "|") .. ")$"
 
   scan.scan_dir(tostring(self.dir), {
@@ -1589,10 +1594,8 @@ Client.apply_async_raw = function(self, on_path, opts)
     respect_gitignore = true,
     search_pattern = opts.pattern or dynamic_pattern,
     on_insert = function(entry)
-      -- Resolve o caminho para garantir consistência
       local entry_path = Path.new(entry):resolve { strict = true }
 
-      -- NOVO: Verificação dinâmica de extensão em vez de .md fixo
       local is_allowed = false
       for _, ext in ipairs(allowed_exts) do
         if vim.endswith(entry_path.filename, ext) then
@@ -1622,60 +1625,59 @@ Client.apply_async_raw = function(self, on_path, opts)
   end
 end
 
---- Generate a unique ID for a new note. This respects the user's `note_id_func` if configured,
---- otherwise falls back to generated a Zettelkasten style ID.
+--- Generate a unique ID for a new note.
 ---
 ---@param title string|?
 ---
 ---@return string
 Client.new_note_id = function(self, title)
   if self.opts.note_id_func ~= nil then
-    local new_id = self.opts.note_id_func(title)
-    if new_id == nil or string.len(new_id) == 0 then
-      error(string.format("Your 'note_id_func' must return a non-empty string, got '%s'!", tostring(new_id)))
-    end
-    -- NOVO: Remove qualquer extensão permitida do ID
-    for _, ext in ipairs(self.opts.allowed_extensions) do
-      new_id = new_id:gsub(util.escape_magic_characters(ext) .. "$", "", 1)
-    end
-    return new_id
-  else
-    return util.zettel_id()
+    return self.opts.note_id_func(title)
   end
+
+  -- MODIFICAÇÃO: Se o título já tem uma extensão permitida, o ID é o próprio título
+  if title then
+    for _, ext in ipairs(self.opts.allowed_extensions or { ".md" }) do
+      if vim.endswith(title, ext) then
+        return title
+      end
+    end
+  end
+
+  return util.zettel_id()
 end
 
---- Generate the file path for a new note given its ID, parent directory, and title.
---- This respects the user's `note_path_func` if configured, otherwise essentially falls back to
---- `spec.dir / (spec.id .. ".md")`.
+--- Generate the file path for a new note.
 ---
 ---@param spec { id: string, dir: obsidian.Path, title: string|? }
 ---
 ---@return obsidian.Path
 Client.new_note_path = function(self, spec)
-  ---@type obsidian.Path
   local path
   if self.opts.note_path_func ~= nil then
     path = Path.new(self.opts.note_path_func(spec))
-    -- (mantém a lógica de path absoluto/relativo original...)
+    if not path:is_absolute() and (spec.dir:is_absolute() or not spec.dir:is_parent_of(path)) then
+      path = spec.dir / path
+    end
   else
     path = spec.dir / tostring(spec.id)
   end
 
-  -- NOVA LÓGICA:
-  local filename = tostring(path)
+  -- MODIFICAÇÃO: Verifica se o ID já termina com uma extensão permitida
+  local id_str = tostring(spec.id)
   local has_allowed_ext = false
-  -- Verifica se o nome já termina com alguma das extensões permitidas
-  for _, ext in ipairs(self.opts.allowed_extensions) do
-    if vim.endswith(filename, ext) then
+  for _, ext in ipairs(self.opts.allowed_extensions or { ".md" }) do
+    if vim.endswith(id_str, ext) then
       has_allowed_ext = true
       break
     end
   end
 
-  -- Se não tiver extensão permitida, força o .md (padrão de contingência)
-  if not has_allowed_ext then
+  -- Se NÃO tem extensão e NÃO termina em .md, força .md
+  if not has_allowed_ext and not vim.endswith(id_str, ".md") then
     return path:with_suffix ".md"
   end
+
   return path
 end
 
@@ -1701,49 +1703,41 @@ Client.parse_title_id_path = function(self, title, id, dir)
     end
   end
 
-  ---@param s string
-  ---@param strict_paths_only boolean
-  ---@return string|?, boolean, string|?
+  -- MODIFICAÇÃO: parse_as_path agora reconhece todas as extensões permitidas
   local parse_as_path = function(s, strict_paths_only)
     local is_path = false
-    ---@type string|?
     local parent
 
-    if s:match "%.md" then
-      -- Remove suffix.
-      s = s:sub(1, s:len() - 3)
-      is_path = true
+    for _, ext in ipairs(self.opts.allowed_extensions or { ".md" }) do
+      if vim.endswith(s, ext) then
+        is_path = true
+        break
+      end
     end
 
-    -- Pull out any parent dirs from title.
     local parts = vim.split(s, "/")
     if #parts > 1 then
       s = parts[#parts]
-      if not strict_paths_only then
-        is_path = true
-      end
+      is_path = true
       parent = table.concat(parts, "/", 1, #parts - 1)
     end
 
-    if s == "" then
-      return nil, is_path, parent
-    else
-      return s, is_path, parent
-    end
+    return s, is_path, parent
   end
 
-  local parent, _, title_is_path
+  local parent, title_is_path
   if id then
     id, _, parent = parse_as_path(id, false)
   elseif title then
-    title, title_is_path, parent = parse_as_path(title, true)
-    if title_is_path then
+    local check_s, is_p, parent_p = parse_as_path(title, true)
+    if is_p then
       id = title
+      title = check_s
+      parent = parent_p
     end
   end
 
   -- Resolve base directory.
-  ---@type obsidian.Path
   local base_dir
   if parent then
     base_dir = self.dir / parent
@@ -1756,13 +1750,7 @@ Client.parse_title_id_path = function(self, title, id, dir)
     end
   else
     local bufpath = Path.buffer(0):resolve()
-    if
-      self.opts.new_notes_location == config.NewNotesLocation.current_dir
-      -- note is actually in the workspace.
-      and self.dir:is_parent_of(bufpath)
-      -- note is not in dailies folder
-      and (self.opts.daily_notes.folder == nil or not (self.dir / self.opts.daily_notes.folder):is_parent_of(bufpath))
-    then
+    if self.opts.new_notes_location == config.NewNotesLocation.current_dir and self.dir:is_parent_of(bufpath) then
       base_dir = self.buf_dir or assert(bufpath:parent())
     else
       base_dir = self.dir
@@ -1772,17 +1760,12 @@ Client.parse_title_id_path = function(self, title, id, dir)
     end
   end
 
-  -- Make sure `base_dir` is absolute at this point.
-  assert(base_dir:is_absolute(), ("failed to resolve note directory '%s'"):format(base_dir))
+  assert(base_dir:is_absolute())
 
-  -- Generate new ID if needed.
   if not id then
     id = self:new_note_id(title)
   end
 
-  -- Generate path.
-  ---@type obsidian.Path
-  ---@diagnostic disable-next-line: assign-type-mismatch
   local path = self:new_note_path { id = id, dir = base_dir, title = title }
 
   return title, id, path
@@ -1815,17 +1798,6 @@ end
 --- Create a new note with the following options.
 ---
 ---@param opts obsidian.CreateNoteOpts|? Options.
----
---- Options:
----  - `title`: A title to assign the note.
----  - `id`: An ID to assign the note. If not specified one will be generated.
----  - `dir`: An optional directory to place the note in. Relative paths will be interpreted
----    relative to the workspace / vault root. If the directory doesn't exist it will be created,
----    regardless of the value of the `no_write` option.
----  - `aliases`: Additional aliases to assign to the note.
----  - `tags`: Additional tags to assign to the note.
----  - `no_write`: Don't write the note to disk.
----  - `template`: The name of a template to apply when writing the note to disk.
 ---
 ---@return obsidian.Note
 Client.create_note = function(self, opts)
@@ -1865,30 +1837,25 @@ end
 ---@param note obsidian.Note
 ---@param opts { path: string|obsidian.Path, template: string|?, update_content: (fun(lines: string[]): string[])|? }|? Options.
 ---
---- Options:
----  - `path`: Override the path to write to.
----  - `template`: The name of a template to use if the note file doesn't already exist.
----  - `update_content`: A function to update the contents of the note. This takes a list of lines
----    representing the text to be written excluding frontmatter, and returns the lines that will
----    actually be written (again excluding frontmatter).
----
 ---@return obsidian.Note
 Client.write_note = function(self, note, opts)
-  local templates = require "obsidian.templates" -- Importamos o motor
+  local templates = require "obsidian.templates"
   opts = opts or {}
 
   local path = assert(opts.path or note.path, "A path must be provided")
   path = Path.new(path)
 
-  if not path:is_file() then
+  -- MODIFICAÇÃO: Inicialização segura do verb e integração de templates
+  local verb = "Created"
+  if path:is_file() then
+    verb = "Updated"
+  else
     -- LÓGICA NOVA: Se não foi passado um template específico, tenta descobrir pela pasta
     if opts.template == nil then
       opts.template = templates.get_template_for_path(self, path)
     end
 
-    -- Se encontrou um template (seja via parâmetro ou via pasta)
     if opts.template ~= nil then
-      -- Chamamos o clone_template original, mas vamos interceptar o conteúdo depois
       note = templates.clone_template {
         template_name = opts.template,
         path = path,
@@ -1896,7 +1863,7 @@ Client.write_note = function(self, note, opts)
         note = note,
       }
 
-      -- INTERCEPTAÇÃO: Lê o arquivo criado e traduz a sintaxe Templater
+      -- Pós-processamento de tags Templater
       local title = note.title or path.stem
       local f = io.open(tostring(path), "r")
       if f then
@@ -1933,10 +1900,6 @@ end
 ---
 ---@param note obsidian.Note
 ---@param opts { bufnr: integer|?, template: string|? }|? Options.
----
---- Options:
----  - `bufnr`: Override the buffer to write to. Defaults to current buffer.
----  - `template`: The name of a template to use if the buffer is empty.
 ---
 ---@return boolean updated If the buffer was updated.
 Client.write_note_to_buffer = function(self, note, opts)
@@ -2010,8 +1973,7 @@ Client.daily_note_path = function(self, datetime)
     id = tostring(os.date("%Y-%m-%d", datetime))
   end
 
-  -- NOVO: Lógica de sufixo inteligente.
-  -- Se o ID gerado pela data não termina em uma extensão permitida, força .md
+  -- MODIFICAÇÃO: Lógica de sufixo inteligente para notas diárias
   local has_allowed_ext = false
   local allowed_exts = self.opts.allowed_extensions or { ".md" }
   for _, ext in ipairs(allowed_exts) do
@@ -2027,7 +1989,6 @@ Client.daily_note_path = function(self, datetime)
     path = path / id
   end
 
-  -- O ID pode conter componentes de caminho (pastas), então usamos o stem para o ID final.
   id = path.stem
 
   return path, id
@@ -2127,14 +2088,11 @@ Client.format_link = function(self, note, opts)
     ---@cast note string|obsidian.Path
     rel_path = tostring(self:vault_relative_path(note, { strict = true }))
 
-    -- VERIFICAÇÃO DE EXTENSÃO
+    -- MODIFICAÇÃO: Link limpo para não-MD
     if not vim.endswith(rel_path, ".md") then
-      -- REGRA: Para não-MD, o label é o nome completo do arquivo (ex: books.base)
       label = opts.label or vim.fs.basename(rel_path)
-      -- REGRA: O note_id deve ser igual ao label para evitar o alias [[id|label]]
-      note_id = opts.id or label
+      note_id = label
     else
-      -- Comportamento padrão para Markdown
       label = opts.label or tostring(note)
       note_id = opts.id
     end
@@ -2142,12 +2100,11 @@ Client.format_link = function(self, note, opts)
     ---@cast note obsidian.Note
     rel_path = tostring(self:vault_relative_path(note.path, { strict = true }))
 
-    -- VERIFICAÇÃO DE EXTENSÃO
+    -- MODIFICAÇÃO: Link limpo para não-MD
     if not vim.endswith(rel_path, ".md") then
       label = opts.label or vim.fs.basename(rel_path)
-      note_id = opts.id or label
+      note_id = label
     else
-      -- Comportamento padrão para Markdown
       label = opts.label or note:display_name()
       note_id = opts.id or note.id
     end
@@ -2158,21 +2115,13 @@ Client.format_link = function(self, note, opts)
     link_style = self.opts.preferred_link_style
   end
 
-  -- Se por algum motivo o label ainda for nulo, usamos o rel_path
   label = label or rel_path
 
-  local new_opts = {
-    path = rel_path,
-    label = label,
-    id = note_id,
-    anchor = opts.anchor,
-    block = opts.block,
-  }
+  local new_opts = { path = rel_path, label = label, id = note_id, anchor = opts.anchor, block = opts.block }
 
   if link_style == config.LinkStyle.markdown then
     return self.opts.markdown_link_func(new_opts)
   elseif link_style == config.LinkStyle.wiki or link_style == nil then
-    -- Aqui, se label == id, o resultado será [[books.base]]
     return self.opts.wiki_link_func(new_opts)
   else
     error(string.format("Invalid link style '%s'", link_style))
@@ -2188,7 +2137,7 @@ Client.picker = function(self, picker_name)
   return require("obsidian.pickers").get(self, picker_name)
 end
 
---- Get all directories in the vault.
+--- NOVO: Get all directories in the vault.
 ---@return string[]
 Client.get_vault_directories = function(self)
   local scan = require "plenary.scandir"
@@ -2199,13 +2148,14 @@ Client.get_vault_directories = function(self)
     hidden = false,
   })
 
-  local relative_dirs = { "" } -- Inclui a raiz
+  local relative_dirs = { "" }
   for _, dir in ipairs(dirs) do
     local rel = self:vault_relative_path(dir)
     if rel then
       table.insert(relative_dirs, tostring(rel))
     end
   end
+
   table.sort(relative_dirs)
   return relative_dirs
 end

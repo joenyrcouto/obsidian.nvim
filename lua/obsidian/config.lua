@@ -462,6 +462,8 @@ config.UIOpts.default = function()
     tags = { hl_group = "ObsidianTag" },
     block_ids = { hl_group = "ObsidianBlockID" },
     hl_groups = {
+      ObsidianOrange = { bold = true, fg = "#f78c6c" }, -- Cor para os colchetes de erro
+      ObsidianError = { fg = "#ff5370", undercurl = true }, -- Cor para o texto do link quebrado
       ObsidianTodo = { bold = true, fg = "#f78c6c" },
       ObsidianDone = { bold = true, fg = "#89ddff" },
       ObsidianRightArrow = { bold = true, fg = "#f78c6c" },
