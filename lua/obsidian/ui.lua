@@ -563,7 +563,7 @@ M.toggle_ui = function(client)
     vim.opt_local.conceallevel = 0
     log.info "Obsidian UI: Desativado (Modo Edição)"
   else
-    vim.opt_local.conceallevel = 2
+    vim.opt_local.conceallevel = 3
     M.update(client.opts.ui, 0)
     log.info "Obsidian UI: Ativado"
   end
@@ -594,21 +594,6 @@ M.setup = function(workspace, ui_opts)
   install_hl_groups(ui_opts)
 
   local pattern = tostring(workspace.root) .. "/*"
-
-  vim.api.nvim_create_autocmd({ "BufEnter" }, {
-    group = group,
-    pattern = pattern,
-    callback = function()
-      if M._paused then
-        return
-      end
-      local cl = vim.opt_local.conceallevel:get()
-      if cl < 1 or cl > 2 then
-        log.warn_once("Obsidian UI requires conceallevel 1 or 2", cl)
-      end
-      return true
-    end,
-  })
 
   vim.api.nvim_create_autocmd({ "BufEnter" }, {
     group = group,
